@@ -1,0 +1,223 @@
+---
+title: "Preprocessing"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+```{r libs, message = FALSE, warning = FALSE}
+library(scran) # needs to be run in R version 4 or higher
+```
+
+### Info
+
+* 'data' (as received from the sequencing)
+
+* 'rawData' (outlier cells and outdated gene models removed)
+
+* 'normData' (normalised with size factor from 'scran' package)
+
+#### Set working directory (full path of the 'scRNAseq_Pipeline' folder).
+
+```{r wd}
+setwd("C:/Users/Vlatka/Documents/scRNAseq_Pipeline")
+```
+
+#### Import functions
+
+```{r import functions, message = FALSE, warning = FALSE}
+source('Functions/Fun_umi_mapped_Plots.R')
+```
+
+
+### 1 Data import
+
+#### Import samples. Customize cell names. Merge replicates.
+
+```{r get data}
+data1 <- read.csv('./Data/Sample_1.csv', row.names = 1) #13865 x 2925
+numCells1 <- dim(data1)[2]
+names(data1) = paste0(rep('rep1_', numCells1), 1:numCells1)
+
+data2 <- read.csv('./Data/Sample_2.csv', row.names = 1)
+numCells2 <- dim(data2)[2]
+names(data2) = paste0(rep('rep2_', numCells2), 1:numCells2) #13865 x 2404
+
+data <- cbind(data1, data2) #13865 x 5329
+```
+
+#### Indexing data by replicates. 
+Not needed in this case, but 'cell_ind' is currently still used as such in the 
+'umiPlot' function.
+
+```{r indices}
+cell_ind <- list()
+for (i in 1:2) {
+  cell_ind[[i]] <- grep(paste0('^rep',i), names(data))
+}
+```
+
+
+### 2 Remove outlier cells
+
+### 2.1 Total UMI counts per cell
+
+Box plot of UMI counts per cell.
+Replicate 1 was sampled further into the bacterial lawn, i.e. it contains more
+feeding cells than replicate 2. That could account for the higher median UMI counts
+in the 1st replicate (undifferentiated cells are known to have higher total 
+transcript count).
+On the same note, as replicate 2 contains more differentiated (aggregated; stickier)
+cell, that could account for more outliers in 2nd replicate (doublet cells).
+
+```{r, totalUMI, fig.height = 2, fig.width = 3}
+totalumi = colSums(data)
+totalumi_1 = colSums(data1)
+totalumi_2 = colSums(data2)
+
+# Boxplot
+par(mgp = c(1.7, .6, 0), mar = c(2, 3, .3, .3))
+boxplot(totalumi_1, totalumi_2, totalumi, 
+        names = c("rep1","rep2", "all"), ylab = "Total UMI",
+        varwidth = T, col = "steelblue3")
+```
+
+#### 2.1a High total UMI outliers
+
+Decide on a cut-off value. Since the two biological replicates were loaded on the 
+same chip (different inputs) and all the reagents were the same, we decided on the
+common threshold for both replicates.
+
+```{r, high out}
+# Cut-off (outliers)
+upperCutoff <- quantile(totalumi, 0.75) + 1.5 * IQR(totalumi)
+
+# Number of outliers (common threshold for both reps)
+#sum(totalumi_1 > upperCutoff) #3
+#sum(totalumi_2 > upperCutoff) #47
+```
+
+#### 2.1b Low total UMI outliers
+
+Histogram of UMI counts per cell. 
+The lower cut-off value is marked with vertical line.
+
+```{r low out, fig.height = 2.5, fig.width = 10}
+# Cut-off
+lowCutoff = 3000 # based on visual inspection
+
+# Number of outliers
+#sum(totalumi_1 < lowCutoff) #234
+#sum(totalumi_2 < lowCutoff) #279
+
+# HISTOGRAM
+par(mfrow = c(1,3))
+histumi(totalumi_1, 'rep1', lowCutoff)
+histumi(totalumi_2, 'rep2', lowCutoff)
+histumi(totalumi, 'all', lowCutoff)
+```
+
+### 2.2 Number of mapped genes per cell
+
+Histogram of the number of mapped genes per cell.
+Lower cut-off value is marked with vertical line.
+
+```{r, mapped, fig.height = 2.5, fig.width = 10}
+mapped = colSums(data > 0)
+mapped1 = colSums(data1 > 0)
+mapped2 = colSums(data2 > 0)
+
+#---------LOW OUTLIERS (number of mapped genes)-----------
+# Cut-off
+cutoff = 800 # based on visual inspection
+
+# Number of outliers
+#sum(mapped1 < cutoff) #176
+#sum(mapped2 < cutoff) #217
+
+# HISTOGRAM
+par(mfrow = c(1,3))
+histm(mapped1, 'rep1', cutoff)
+histm(mapped2, 'rep2', cutoff)
+histm(mapped, 'all', cutoff)
+```
+
+### 2.3 Removing the outlier cells
+
+```{r, out}
+out1 <- totalumi > upperCutoff; #sum(out1) # high_UMI: 50
+out2 <- totalumi < lowCutoff; #sum(out2) # low_UMI: 513
+out3 <- mapped < cutoff; #sum(out3) # low_mapped: 393
+
+out <- out1 | out2 | out3
+#sum(out) # 586, a lot of 'out2' and 'out3' overlap
+
+# Removing the outlier cells
+rawData0 <- data; rawData0[,out] <- NULL # 13865 x 4743
+```
+
+#### Plot outliers
+Plot total UMI counts per cell. 
+Dotted vertical line marks separates replicates.
+Gray horizontal line marks the median values for replicate 1 and 2, respectively.
+
+```{r out_plot, fig.height = 2.25, fig.width = 4.5}
+umiPlot(totalumi, cell_ind)
+points(which(out1==T), totalumi[out1], pch=20, cex=1, col='purple') # high total UMIs
+points(which(out2==T), totalumi[out2], pch=20, cex=1, col='purple') # low total UMIs
+points(which(out3==T), totalumi[out3], pch=20, cex=.8, col='black') # low num. of mapped genes
+```
+
+
+### 3 Removing outdated gene models
+
+Removing gene models not considered genes anymore (removed from the gene list on
+dictybase.org)
+
+```{r, genes out, fig.height = 2.25, fig.width = 4.5}
+# List of gene models currently present in 'dictyBase'
+info <- read.csv('./Data/geneInfo.csv', row.names = 1)
+
+# Keeping only those genes 
+rawData <- rawData0[rownames(info),] # 13231 x 4743
+
+# Check: Plot percentage of reads coming from genes removed from dictyBase
+# ~ 0.1 %
+genes_out <- setdiff(rownames(data), rownames(info)) # 634 genes
+perc_out <- colSums(data[genes_out,]) / colSums(data)
+# median(perc_out) # 0.001241188
+
+par(mgp = c(1.7, .6, 0), mar = c(3, 3, 1, .3))
+plot(perc_out, main = "Counts from regions no longer considered genes", 
+     xlab = "Cell indices", ylab = "Ratio of UMI counts", type = "l",
+     col = "steelblue4", lwd = .5, cex.main = 1,)
+```
+
+
+### 4 Normalization
+
+```{r size factor, fig.height = 1.5, fig.width = 3}
+# Size factors from 'scran' package (pooling and deconvolution)
+# A: Pre-clustering based on expression profiles
+sfCluster <- quickCluster(rawData)
+# B: Deconvolution
+sf <- sizeFactors(computeSumFactors(SingleCellExperiment(list(counts = rawData)), 
+                                              clusters = sfCluster))
+# Check the distribution of size factors
+par(mgp = c(1.3, .4, 0), mar = c(2.3, 2.3, 1, .1))
+hist(sf, 30)
+```
+
+```{r normalise}
+#---------Normalize read counts-----------
+normData = t(t(rawData) / sf)
+
+#---------EXPORT-----------
+# outfolder <- './Data/'
+# write.csv(normData, paste0(outfolder, 'norm_counts.csv'))
+```
+
+
+

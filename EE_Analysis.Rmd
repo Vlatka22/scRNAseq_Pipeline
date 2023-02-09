@@ -1,0 +1,190 @@
+---
+title: "EE_Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+```{r libs, message = FALSE, warning = FALSE}
+library(dplyr) # %in%
+library(plotfunctions)
+library(ggplot2)
+library(ks)
+```
+
+#### Set working directory (full path of the 'scRNAseq_Pipeline' folder).
+
+```{r wd}
+setwd("C:/Users/Vlatka/Documents/scRNAseq_Pipeline")
+```
+
+#### Import functions
+
+```{r import functions, message = FALSE, warning = FALSE}
+source('Functions/Fun_EE_expressionPlot.R')
+source('Functions/Fun_densityPlot.R')
+```
+
+
+### 1 Data import
+
+Import UMI counts (counts). Import gene features (info).
+
+Import 2D cell coordinates after dimensionality reduction (XX).
+Reducing the dimensionality of transcriptome data to two dimensions used PCA first, 
+then elastic embedding on the first 11 principal components (selected based on their 
+variance contribution), as described in: Chen et al. (2019) Bioinformatics. 
+doi: 10.1093/bioinformatics/bty1009.
+
+```{r get data}
+counts <- read.csv("./Data/norm_counts.csv", row.names = 1)
+
+# Gene Info
+info <- read.csv('./Data/geneInfo_All.csv', header = T, row.names = 1)
+
+# Data after (PCA and) EE
+XX <- as.matrix(read.csv('./Data/SCRAN_0_01_EE.csv', header = F))
+```
+
+#### log10(UMI counts)
+
+```{r log expression}
+# log10 expression. <1 equaled to 1, resulting in min(log10(x))=0
+# For gene expression overlay; doesn't matter if the count is 0 or 1.
+logCounts <- counts %>% replace(., . < 1, 1) %>% log10()
+```
+
+
+### 2 Plot expression
+
+#### 2.1 Plot individual gene expression
+
+```{r gene plot functions, message = FALSE, warning = FALSE}
+#---------Functions-----------
+# simplified plot
+plotgene <- function(gene_name, background = 'white'){
+  eplot(gene_name, colPal, steps, psize1, psize2, if_legend = T, if_title = T, background)
+}
+
+# ... with ID
+plotgeneid <- function(gene_id, background = 'white'){
+  idplot(gene_id, colPal, steps, psize1, psize2, if_legend = T, if_title = T, background)
+}
+```
+
+```{r plot settings}
+#---------Plot settings-----------
+# Colour palette
+colPal = colorRampPalette(c('gray87', 'whitesmoke', 'gold2', 'orange', 'red'));
+steps = 10 # #for colour-coding the data
+
+# Outer ring, inner circle
+psize1 = 1; psize2 = .75
+```
+
+```{r gene expression plots, fig.height = 8, fig.width = 10}
+#---------Plot-----------
+# Min to max value
+par(mfrow = c(3,3))
+plotgene('cafA')
+plotgene('carA-1')
+plotgene('csbA')
+plotgene('tps3')
+plotgene('pspA')
+plotgene('ctnA')
+plotgene('dscE')
+plotgene('cbpE')
+```
+
+#### 2.2 Plot avarage expression of a group of genes
+
+```{r gene group plot function}
+#---------Functions-----------
+# Plot mean expression of a gene set
+plotset <- function(gene_set, thresh, if_legend, out, if_title = T){
+  # Above threshold in at least one cell
+  over <- rowSums(counts > thresh) > 0
+  set <- info[ ,gene_set] & over
+  if (sum(set)==0) return()
+  # Mean gene expression values
+  arg = colMeans(logCounts[set, ])
+  # Plot
+  if (missing(out)) {
+    vplot(arg, colPal, steps, psize1, psize2, if_legend, background = 'white')
+  } else {
+    vplotTop(arg, out, colPal, steps, psize1, psize2, if_legend, 1, 
+         background = 'white')  
+  }
+  # Title
+  if (if_title==T) {title(main = paste0(gene_set,' > ',thresh), cex.main = 0.9)}
+}
+```
+
+```{r expression plots, fig.height = 8, fig.width = 10}
+#---------Plot-----------
+# Genes expressed > threshold in at least one cell
+th <- 10
+
+par(mfrow = c(3,3))
+plotset('rib', th, T)
+plotset('agg', th, T)
+plotset('moundUp', th, T)
+
+# 'milestone' morphological change (Katoh-Kurasawa et al. 2021):
+plotset('stream_down', th, T) 
+plotset('stream_up', th, T) 
+plotset('tight_down', th, T) 
+plotset('tight_up', th, T) 
+
+th <- 1
+plotset('cellCycle', th, T, out = .2)
+```
+
+
+### 3. Cell density plots
+
+#### 3D density plot
+
+```{r 3D density plot, warning = FALSE, fig.height = 2.5}
+# Define grid
+x_lim = c(-5.5, 6.5)
+y_lim = c(-6.5, 4.5)
+by <- diff(x_lim) / 500 # resolution
+
+xseq <- seq(x_lim[1] + .02, x_lim[2] + .05, by = by)
+yseq <- seq(y_lim[1] - .05, y_lim[2] - .1, by = by)
+grid <- expand.grid(xseq, yseq)
+
+# Bandwith
+hvalue = Hpi(XX)
+
+# Densities
+KDE <- ks::kde(XX, H = hvalue, eval.points = grid, binned = T)$estimate
+dens <- matrix(KDE, ncol = length(yseq), nrow = length(xseq))
+
+# Plot 3-dimensional density surface
+par(mar = c(0,0,1,0))
+persp(xseq, yseq, dens, theta = 330, phi = 30, expand = 0.4, r = 90, ltheta = 80,
+           shade = 0, border = NA, main = 'Density landscape', axes = F)
+```
+
+#### 2D density plot
+
+```{r 2D density plot, warning = FALSE, message = FALSE, fig.height = 3}
+#---------Colour palette----------
+# Adjust discrete palette length & binNum 
+
+# Reverse & add white as a baseline
+mypalette = rev(RColorBrewer::brewer.pal(11, 'RdYlBu')); mypalette =  c('white', mypalette)
+
+#---------PLOT-----------
+# Define top level for EE density plot
+d_ee <- d_plot()
+
+# Plot density
+# set or calculate h-value
+plotContour(d_ee, 'ndensity')
+```
+
