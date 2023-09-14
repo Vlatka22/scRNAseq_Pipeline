@@ -12,6 +12,7 @@ library(dplyr) # %in%
 library(plotfunctions)
 library(RColorBrewer)
 library(gridExtra)
+library(ggplot2)
 ```
 
 #### Set working directory (full path of the 'scRNAseq_Pipeline' folder).
